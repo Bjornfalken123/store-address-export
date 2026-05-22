@@ -1,0 +1,43 @@
+name: Export store addresses
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas
+
+      - name: Run export script
+        run: |
+          python hamta_butiksadresser_osm.py
+
+      - name: Upload CSV as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: butiksadresser_osm
+          path: butiksadresser_osm.csv
+
+      - name: Commit CSV to repository
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add butiksadresser_osm.csv
+          git commit -m "Update store address export" || echo "No changes to commit"
+          git push
