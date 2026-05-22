@@ -1,85 +1,60 @@
 #!/usr/bin/env python3
 """
-Hämtar butiksadresser för valda matkedjor i Nederländerna, Belgien och Frankrike från OpenStreetMap via Overpass API.
+Robust export av matbutiksadresser från OpenStreetMap via Overpass API.
 
-Output: butiksadresser_osm.csv
+Skapar:
+  - butiksadresser_osm.csv
+  - butiksadresser_osm_partial.csv under körning
+  - overpass_failures.txt om någon del misslyckas
+
 Kolumnen address_formatted följer formatet:
-  "Rue de Rivoli 75001 Paris France"
+  Rue de Rivoli 75001 Paris France
 
-Obs: Detta är komplett enligt OpenStreetMap-data vid körningstillfället, inte en garanti för att varje kedjas egna officiella register är komplett speglat i OSM.
+Obs: Resultatet är komplett enligt OpenStreetMap vid körningstillfället, inte garanterat komplett enligt kedjornas egna interna register.
 """
 from __future__ import annotations
 
 import csv
 import json
+import sys
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 
-TARGETS: List[Tuple[str, str, List[str]]] = [
-    ("Netherlands", "NL", ["Albert Heijn"]),
-    ("Belgium", "BE", ["Carrefour", "Delhaize", "Albert Heijn", "Colruyt", "Intermarché", "Intermarche"]),
-    ("France", "FR", ["Carrefour"]),
+TARGETS: List[Tuple[str, str, str, List[str]]] = [
+    ("Netherlands", "NL", "Albert Heijn", ["Albert Heijn", "AH"]),
+    ("Belgium", "BE", "Carrefour", ["Carrefour", "Carrefour Market", "Carrefour Express"]),
+    ("Belgium", "BE", "Delhaize", ["Delhaize", "AD Delhaize", "Proxy Delhaize", "Shop & Go Delhaize"]),
+    ("Belgium", "BE", "Albert Heijn", ["Albert Heijn", "AH"]),
+    ("Belgium", "BE", "Colruyt", ["Colruyt"]),
+    ("Belgium", "BE", "Intermarché", ["Intermarché", "Intermarche"]),
+    ("France", "FR", "Carrefour", ["Carrefour", "Carrefour Market", "Carrefour City", "Carrefour Express", "Carrefour Contact", "Carrefour Montagne", "Bon app’", "Bon app'"]),
 ]
-
-# Common brand spelling variants in OSM.
-BRAND_VARIANTS: Dict[str, List[str]] = {
-    "Albert Heijn": ["Albert Heijn", "AH"],
-    "Carrefour": ["Carrefour", "Carrefour Market", "Carrefour City", "Carrefour Express", "Carrefour Contact"],
-    "Delhaize": ["Delhaize", "AD Delhaize", "Proxy Delhaize", "Shop & Go Delhaize"],
-    "Colruyt": ["Colruyt"],
-    "Intermarché": ["Intermarché", "Intermarche"],
-    "Intermarche": ["Intermarché", "Intermarche"],
-}
 
 COUNTRY_NAME = {"NL": "Netherlands", "BE": "Belgium", "FR": "France"}
+FIELDNAMES = [
+    "country", "chain", "name", "street", "housenumber", "postcode", "city",
+    "address_formatted", "osm_type", "osm_id", "lat", "lon", "source"
+]
 
 
-def overpass_query(country_code: str, brands: Iterable[str]) -> str:
-    parts = []
-    for brand in brands:
-        safe = brand.replace('"', '\\"')
-        # Query by brand and by name, because OSM tagging varies by mapper.
-        parts.append(f'nwr["shop"="supermarket"]["brand"="{safe}"](area.searchArea);')
-        parts.append(f'nwr["shop"="supermarket"]["name"~"^{safe}$",i](area.searchArea);')
-        # Some small-format stores can be tagged as convenience.
-        parts.append(f'nwr["shop"="convenience"]["brand"="{safe}"](area.searchArea);')
-        parts.append(f'nwr["shop"="convenience"]["name"~"^{safe}$",i](area.searchArea);')
-    return f'''
-[out:json][timeout:180];
-area["ISO3166-1"="{country_code}"][admin_level=2]->.searchArea;
-(
-{chr(10).join(parts)}
-);
-out tags center;
-'''
+def log(msg: str) -> None:
+    print(msg, flush=True)
 
 
-def fetch(query: str) -> dict:
-    data = urllib.parse.urlencode({"data": query}).encode("utf-8")
-    last_error = None
-    for url in OVERPASS_URLS:
-        try:
-            req = urllib.request.Request(url, data=data, headers={"User-Agent": "store-address-export/1.0"})
-            with urllib.request.urlopen(req, timeout=240) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            time.sleep(5)
-    raise RuntimeError(f"Overpass query failed: {last_error}")
-
-
-def norm_brand(chain: str) -> str:
-    s = chain.lower().replace("é", "e")
+def norm_brand(value: str) -> str:
+    s = (value or "").lower().replace("é", "e").replace("’", "'")
     if "albert" in s or s == "ah":
         return "Albert Heijn"
-    if "carrefour" in s:
+    if "carrefour" in s or "bon app" in s:
         return "Carrefour"
     if "delhaize" in s:
         return "Delhaize"
@@ -87,7 +62,38 @@ def norm_brand(chain: str) -> str:
         return "Colruyt"
     if "intermarche" in s:
         return "Intermarché"
-    return chain
+    return value
+
+
+def overpass_query(country_code: str, brand: str) -> str:
+    safe = brand.replace('"', '\\"')
+    return f'''
+[out:json][timeout:75];
+area["ISO3166-1"="{country_code}"][admin_level=2]->.searchArea;
+(
+  nwr["shop"~"^(supermarket|convenience)$"]["brand"="{safe}"](area.searchArea);
+  nwr["shop"~"^(supermarket|convenience)$"]["name"~"^{safe}$",i](area.searchArea);
+);
+out tags center;
+'''
+
+
+def fetch(query: str, attempt_label: str) -> dict:
+    data = urllib.parse.urlencode({"data": query}).encode("utf-8")
+    last_error: Exception | None = None
+    for url in OVERPASS_URLS:
+        for attempt in range(1, 3):
+            try:
+                log(f"    Trying {url} attempt {attempt}/2")
+                req = urllib.request.Request(url, data=data, headers={"User-Agent": "store-address-export-github-actions/2.0"})
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    text = resp.read().decode("utf-8")
+                    return json.loads(text)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                log(f"    Failed: {type(exc).__name__}: {exc}")
+                time.sleep(10)
+    raise RuntimeError(f"{attempt_label} failed after all Overpass endpoints. Last error: {last_error}")
 
 
 def format_address(tags: Dict[str, str], country_code: str) -> str:
@@ -100,32 +106,60 @@ def format_address(tags: Dict[str, str], country_code: str) -> str:
     return " ".join(x for x in [line1, postcode, city, country] if x)
 
 
+def is_complete_address(tags: Dict[str, str]) -> bool:
+    return bool(tags.get("addr:street") and tags.get("addr:postcode") and (tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:village")))
+
+
+def write_csv(path: str | Path, rows: List[dict]) -> None:
+    rows.sort(key=lambda r: (r["country"], r["chain"], r["city"], r["street"], r["housenumber"], str(r["osm_id"])))
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main() -> None:
     seen = set()
-    rows = []
-    for country_name, country_code, chains in TARGETS:
-        for chain in chains:
-            if chain == "Intermarche":
+    rows: List[dict] = []
+    failures: List[str] = []
+
+    total_jobs = sum(len(variants) for _, _, _, variants in TARGETS)
+    job_no = 0
+
+    for country_name, country_code, chain, variants in TARGETS:
+        for variant in variants:
+            job_no += 1
+            label = f"{country_name} / {chain} / {variant}"
+            log(f"\n[{job_no}/{total_jobs}] Fetching {label}")
+            try:
+                payload = fetch(overpass_query(country_code, variant), label)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"{label}: {type(exc).__name__}: {exc}"
+                failures.append(msg)
+                log(f"  SKIPPING after failure: {msg}")
                 continue
-            variants = BRAND_VARIANTS.get(chain, [chain])
-            print(f"Fetching {chain} in {country_name} ...")
-            payload = fetch(overpass_query(country_code, variants))
-            for el in payload.get("elements", []):
+
+            elements = payload.get("elements", [])
+            added = 0
+            skipped_no_address = 0
+            for el in elements:
                 tags = el.get("tags", {})
+                if not is_complete_address(tags):
+                    skipped_no_address += 1
+                    continue
+
                 raw_brand = tags.get("brand") or tags.get("name") or chain
                 canonical_chain = norm_brand(raw_brand)
-                if canonical_chain != norm_brand(chain):
-                    # Keep Carrefour formats, but exclude unrelated names accidentally matching short variants.
-                    if norm_brand(chain) != "Carrefour" or "carrefour" not in raw_brand.lower():
-                        continue
-                address = format_address(tags, country_code)
-                # Keep only entries with at least street, postcode and city so the required format is useful.
-                if not (tags.get("addr:street") and tags.get("addr:postcode") and (tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:village"))):
+                wanted_chain = norm_brand(chain)
+                if canonical_chain != wanted_chain:
                     continue
-                key = (country_code, canonical_chain, address.lower())
+
+                address = format_address(tags, country_code)
+                key = (country_code, canonical_chain, address.lower(), str(el.get("id", "")))
                 if key in seen:
                     continue
                 seen.add(key)
+
                 rows.append({
                     "country": country_name,
                     "chain": canonical_chain,
@@ -141,17 +175,26 @@ def main() -> None:
                     "lon": el.get("lon") or el.get("center", {}).get("lon", ""),
                     "source": "OpenStreetMap via Overpass API",
                 })
-            time.sleep(2)
+                added += 1
 
-    rows.sort(key=lambda r: (r["country"], r["chain"], r["city"], r["street"], r["housenumber"]))
-    out = "butiksadresser_osm.csv"
-    with open(out, "w", newline="", encoding="utf-8-sig") as f:
-        fieldnames = ["country", "chain", "name", "street", "housenumber", "postcode", "city", "address_formatted", "osm_type", "osm_id", "lat", "lon", "source"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Done. Wrote {len(rows)} rows to {out}")
+            write_csv("butiksadresser_osm_partial.csv", rows)
+            log(f"  Found {len(elements)} OSM elements. Added {added}. Skipped without full address {skipped_no_address}. Total rows now {len(rows)}.")
+            time.sleep(3)
+
+    write_csv("butiksadresser_osm.csv", rows)
+
+    if failures:
+        Path("overpass_failures.txt").write_text("\n".join(failures), encoding="utf-8")
+        log("\nCompleted with some failed chunks. See overpass_failures.txt")
+    else:
+        log("\nCompleted without failed chunks.")
+
+    log(f"Done. Wrote {len(rows)} rows to butiksadresser_osm.csv")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        log("Interrupted by user.")
+        sys.exit(130)
