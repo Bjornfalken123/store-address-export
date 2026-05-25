@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Retail Address Finder</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><span class="logo">●</span> Retail Address Finder</div>
+    <div class="top-actions"><span>?</span><span>🔔</span><span class="avatar">AM</span></div>
+  </div>
+
+  <div class="app">
+    <aside class="sidebar">
+      <a class="nav active">⌂ Dashboard</a>
+      <a class="nav">▦ Requests</a>
+      <a class="nav">↓ Exports</a>
+      <a class="nav">◎ Sources</a>
+      <a class="nav">⚙ Settings</a>
+      <a class="nav support">? Support</a>
+    </aside>
+
+    <main>
+      <section class="grid-main">
+        <form id="requestForm" class="card request-card">
+          <h2>Create new request</h2>
+          <p>Define your search and generate a file.</p>
+
+          <label>Chain
+            <input id="chain" value="REMA 1000" placeholder="Ex. REMA 1000" required />
+          </label>
+          <label>Country
+            <input id="country" value="Norway" placeholder="Ex. Norway" required />
+          </label>
+          <label>Output format
+            <select id="format"><option>CSV (UTF-8)</option><option>XLSX</option></select>
+          </label>
+          <label>Source priority
+            <select id="source"><option>OpenStreetMap</option><option>Official + OSM</option></select>
+          </label>
+          <label>Describe what you need <span class="muted">optional</span>
+            <textarea id="prompt" placeholder="Ex. Include only supermarkets, exclude pharmacy-only locations."></textarea>
+          </label>
+
+          <button type="submit">Generate file →</button>
+          <small>Estimated time: 2–8 minutes depending on country and chain.</small>
+        </form>
+
+        <section class="card progress-card">
+          <div class="card-head">
+            <div><h2 id="requestTitle">Request preview</h2><p id="jobId">No job started yet</p></div>
+            <div class="timestamps"><span>Requested</span><b id="requestedTime">—</b></div>
+          </div>
+
+          <div class="timeline" id="timeline">
+            <div class="step active"><span>1</span><b>Queued</b><small>Waiting</small></div>
+            <div class="step"><span>2</span><b>Collecting</b><small>Sources</small></div>
+            <div class="step"><span>3</span><b>Normalizing</b><small>Addresses</small></div>
+            <div class="step"><span>4</span><b>Validating</b><small>Quality</small></div>
+            <div class="step"><span>5</span><b>Ready</b><small>Download</small></div>
+          </div>
+
+          <div class="stats">
+            <div><b id="storesFound">0</b><span>Total stores found</span></div>
+            <div><b id="validAddresses">0</b><span>Valid formatted addresses</span></div>
+            <div><b id="missingPostcodes">0</b><span>Missing postcodes</span></div>
+            <div><b id="duplicatesRemoved">0</b><span>Duplicates removed</span></div>
+            <div><b id="rowsReady">0</b><span>Rows ready to export</span></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="content-grid">
+        <section class="card mini-map">
+          <h3>Geographic coverage</h3><p id="coverageCountry">Country appears after export starts</p>
+          <div class="map-shape">◆</div><small>Coverage by address availability</small>
+        </section>
+
+        <section class="card table-card">
+          <div class="card-head"><h3>Sample results</h3><span id="sampleCount">0 rows</span></div>
+          <table>
+            <thead><tr><th>Store name</th><th>Formatted address</th><th>Postcode</th><th>Source</th></tr></thead>
+            <tbody id="sampleRows">
+              <tr><td colspan="4" class="empty">Start an export to generate a preview.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card download-card" id="downloadCard">
+          <div class="file-icon">✓</div>
+          <h3>Export status</h3>
+          <p id="downloadText">Your file will appear here when ready.</p>
+          <a id="actionsLink" href="#" target="_blank" class="secondary disabled">Open GitHub Actions</a>
+        </section>
+      </section>
+
+      <section class="card jobs-card">
+        <div class="card-head"><h3>Recent jobs</h3><a href="#">View all</a></div>
+        <table>
+          <thead><tr><th>ID</th><th>Chain</th><th>Country</th><th>Status</th><th>Rows</th><th>Format</th><th>Actions</th></tr></thead>
+          <tbody id="recentJobs">
+            <tr><td>#4287</td><td>Albert Heijn</td><td>Netherlands</td><td><span class="badge ready">Ready</span></td><td>956</td><td>CSV</td><td>↓</td></tr>
+            <tr><td>#4286</td><td>Carrefour</td><td>France</td><td><span class="badge processing">Processing</span></td><td>—</td><td>CSV</td><td>…</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
